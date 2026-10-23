@@ -28,13 +28,18 @@ void EyesDisplay::SetupUI() {
 
     DisplayLockGuard lock(this);
     auto screen = lv_screen_active();
+    // Il font va messo SOLO sullo schermo: quando il firmware carica il font degli
+    // asset, OledDisplay::SetTheme() lo riaggancia qui e il vecchio viene liberato.
+    // Un font impostato direttamente sull'etichetta resterebbe un puntatore al font
+    // liberato e farebbe crashare LVGL (riavvio dopo "Refreshing display theme").
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    lv_obj_set_style_text_font(screen, lvgl_theme->text_font()->font(), 0);
     lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     eyes_.Create(screen, width_, height_);
 
     // Riquadro di testo per i messaggi di sistema (nascosto di solito)
-    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
     text_box_ = lv_obj_create(screen);
     lv_obj_remove_style_all(text_box_);
     lv_obj_set_size(text_box_, width_, height_);
@@ -46,7 +51,6 @@ void EyesDisplay::SetupUI() {
 
     text_label_ = lv_label_create(text_box_);
     lv_obj_set_width(text_label_, width_ - 4);
-    lv_obj_set_style_text_font(text_label_, lvgl_theme->text_font()->font(), 0);
     lv_obj_set_style_text_color(text_label_, lv_color_black(), 0);
     lv_obj_set_style_text_align(text_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(text_label_, LV_LABEL_LONG_MODE_WRAP);
