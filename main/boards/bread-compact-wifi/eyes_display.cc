@@ -9,9 +9,16 @@
 
 #define TAG "EyesDisplay"
 
+// Luminosita' dell'OLED (0x00-0xFF). Gli occhi accendono molti pixel: a luminosita'
+// piena l'OLED assorbe piu' corrente dalla stessa 3V3 del microfono. 0x30 resta ben
+// leggibile. Se il microfono funziona e vuoi occhi piu' luminosi, alza questo valore.
+#ifndef EYES_CONTRAST
+#define EYES_CONTRAST 0x30
+#endif
+
 EyesDisplay::EyesDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                          int width, int height, bool mirror_x, bool mirror_y)
-    : OledDisplay(panel_io, panel, width, height, mirror_x, mirror_y) {}
+    : OledDisplay(panel_io, panel, width, height, mirror_x, mirror_y), eyes_panel_io_(panel_io) {}
 
 EyesDisplay::~EyesDisplay() {
     DisplayLockGuard lock(this);
@@ -38,6 +45,13 @@ void EyesDisplay::SetupUI() {
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     eyes_.Create(screen, width_, height_);
+
+    // SSD1306/SH1106: comando 0x81 = contrasto
+    uint8_t contrast = EYES_CONTRAST;
+    if (eyes_panel_io_ != nullptr &&
+        esp_lcd_panel_io_tx_param(eyes_panel_io_, 0x81, &contrast, 1) != ESP_OK) {
+        ESP_LOGW(TAG, "Impossibile impostare il contrasto dell'OLED");
+    }
 
     // Riquadro di testo per i messaggi di sistema (nascosto di solito)
     text_box_ = lv_obj_create(screen);

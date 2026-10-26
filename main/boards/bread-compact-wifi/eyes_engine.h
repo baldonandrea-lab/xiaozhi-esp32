@@ -38,6 +38,7 @@ private:
     void Draw(lv_layer_t* layer, const lv_area_t* a);
     void DrawEye(lv_layer_t* layer, const lv_area_t* a, float cx, bool left);
     uint32_t Rand();
+    lv_area_t EyesArea() const;
 
     lv_obj_t* obj_ = nullptr;
     lv_timer_t* timer_ = nullptr;
@@ -55,4 +56,6 @@ private:
     float sacc_x_ = 0, sacc_y_ = 0;
     uint32_t rng_ = 0x1234567u;
     int32_t drawn_sig_[12] = {0};
+    lv_area_t last_area_{};
+    bool has_last_area_ = false;
 };

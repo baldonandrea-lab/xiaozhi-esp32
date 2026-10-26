@@ -30,6 +30,7 @@ private:
     void RefreshMode();
 
     EyesEngine eyes_;
+    esp_lcd_panel_io_handle_t eyes_panel_io_ = nullptr;
     lv_obj_t* text_box_ = nullptr;
     lv_obj_t* text_label_ = nullptr;
     lv_timer_t* state_timer_ = nullptr;

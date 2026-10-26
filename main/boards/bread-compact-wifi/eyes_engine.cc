@@ -14,7 +14,8 @@
 
 namespace {
 constexpr float kPi = 3.14159265f;
-constexpr uint32_t kFrameMs = 33;      // ~30 fps
+constexpr uint32_t kFrameMs = 66;      // ~15 fps: meno traffico I2C e meno carico
+                                       // (a 30 fps disturbava l'acquisizione audio)
 constexpr uint32_t kBlinkMs = 170;     // durata ammiccamento
 
 inline int32_t Q(float v) { return static_cast<int32_t>(lroundf(v)); }
@@ -136,12 +137,12 @@ void EyesEngine::Tick(uint32_t now) {
     Shape goal = target_;
     float pulse = 1.0f, bounce = 0.0f;
     switch (activity_) {
-        case Activity::Listening:   // occhi più grandi e attenti
+        case Activity::Listening:   // occhi più grandi e attenti, FERMI:
+            // mentre ascolta il display non deve ridisegnare di continuo
             goal.h *= 1.12f; goal.w *= 1.05f; goal.gy -= 1;
-            pulse = 1.0f + 0.03f * std::sin(t * 2 * kPi * 1.2f);
             break;
-        case Activity::Speaking:    // piccolo rimbalzo mentre parla
-            bounce = 1.6f * std::sin(t * 2 * kPi * 3.0f);
+        case Activity::Speaking:    // piccolo rimbalzo mentre parla (lento)
+            bounce = 1.5f * std::sin(t * 2 * kPi * 1.5f);
             break;
         case Activity::Connecting:  // sguardo che "cerca"
             goal.gx = 11.0f * std::sin(t * 2 * kPi * 0.5f);
@@ -191,7 +192,7 @@ void EyesEngine::Tick(uint32_t now) {
     if (sleeping_) {
         blink = 0.85f + 0.15f * std::sin(t * 2 * kPi * 0.25f);
     } else {
-        if (!blinking_ && now >= next_blink_) {
+        if (!blinking_ && now >= next_blink_ && activity_ != Activity::Listening) {
             blinking_ = true;
             blink_start_ = now;
             double_blink_ = (Rand() % 5 == 0);
@@ -225,8 +226,41 @@ void EyesEngine::Tick(uint32_t now) {
         Q(draw_.scale_l * 40), Q(draw_.scale_r * 40), Q(draw_.open_l * 40), Q(draw_.open_r * 40)};
     if (obj_ != nullptr && std::memcmp(sig, drawn_sig_, sizeof(sig)) != 0) {
         std::memcpy(drawn_sig_, sig, sizeof(sig));
-        lv_obj_invalidate(obj_);
+        // ridisegna solo il rettangolo che contiene gli occhi (vecchia + nuova posizione)
+        lv_area_t area = EyesArea();
+        lv_area_t dirty = area;
+        if (has_last_area_) {
+            dirty.x1 = LV_MIN(dirty.x1, last_area_.x1);
+            dirty.y1 = LV_MIN(dirty.y1, last_area_.y1);
+            dirty.x2 = LV_MAX(dirty.x2, last_area_.x2);
+            dirty.y2 = LV_MAX(dirty.y2, last_area_.y2);
+        }
+        last_area_ = area;
+        has_last_area_ = true;
+        lv_obj_invalidate_area(obj_, &dirty);
     }
+}
+
+lv_area_t EyesEngine::EyesArea() const {
+    // Rettangolo (coordinate schermo) che contiene i due occhi con un margine:
+    // le palpebre sporgono di 2 px, il taglio "felice" del 12% in larghezza.
+    const Shape& s = draw_;
+    float smax = std::fmax(s.scale_l, s.scale_r);
+    float w = s.w * smax * k_ * 1.25f;
+    float h = s.h * smax * k_;
+    float spacing = 24.0f * k_;
+    float cx = width_ / 2.0f + s.gx * k_;
+    float cy = height_ / 2.0f + s.gy * k_;
+    lv_area_t a;
+    a.x1 = static_cast<int32_t>(cx - spacing - w / 2) - 4;
+    a.x2 = static_cast<int32_t>(cx + spacing + w / 2) + 4;
+    a.y1 = static_cast<int32_t>(cy - h / 2) - 4;
+    a.y2 = static_cast<int32_t>(cy + h / 2) + 4;
+    if (a.x1 < 0) a.x1 = 0;
+    if (a.y1 < 0) a.y1 = 0;
+    if (a.x2 > width_ - 1) a.x2 = width_ - 1;
+    if (a.y2 > height_ - 1) a.y2 = height_ - 1;
+    return a;
 }
 
 void EyesEngine::DrawCb(lv_event_t* e) {
