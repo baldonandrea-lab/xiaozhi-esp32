@@ -23,6 +23,26 @@
 
 #define TAG "CompactWifiBoard"
 
+#include <atomic>
+#include <algorithm>
+#include <esp_timer.h>
+
+// Codec con mute del microfono: in mute legge solo silenzio
+class MutableMicCodec : public NoAudioCodecSimplex {
+public:
+    using NoAudioCodecSimplex::NoAudioCodecSimplex;
+    std::atomic<bool> mic_muted{false};
+
+protected:
+    int Read(int16_t* dest, int samples) override {
+        int n = NoAudioCodecSimplex::Read(dest, samples);
+        if (mic_muted) {
+            std::fill(dest, dest + samples, 0);
+        }
+        return n;
+    }
+};
+
 class CompactWifiBoard : public WifiBoard {
 private:
     i2c_master_bus_handle_t display_i2c_bus_;
@@ -101,16 +121,53 @@ private:
 
         display_ = new EyesDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
+        esp_timer_handle_t click_timer_ = nullptr;
+
+    MutableMicCodec* GetMicCodec() { return static_cast<MutableMicCodec*>(GetAudioCodec()); }
+
+    void ToggleMicMute() {
+        auto codec = GetMicCodec();
+        bool muted = !codec->mic_muted;
+        codec->mic_muted = muted;
+        auto& app = Application::GetInstance();
+        if (muted && app.GetDeviceState() == kDeviceStateListening) {
+            app.ToggleChatState();  // chiude l'ascolto in corso
+        }
+        GetDisplay()->ShowNotification(muted ? "Microfono disattivato" : "Microfono attivo", 3000);
+    }
 
     void InitializeButtons() {
+                // Click singolo con 400 ms di ritardo: se arriva un doppio click viene annullato
+        esp_timer_create_args_t click_args = {
+            .callback = [](void* arg) {
+                auto self = static_cast<CompactWifiBoard*>(arg);
+                auto& app = Application::GetInstance();
+                if (app.GetDeviceState() == kDeviceStateStarting) {
+                    self->EnterWifiConfigMode();
+                    return;
+                }
+                if (self->GetMicCodec()->mic_muted) {
+                    self->GetDisplay()->ShowNotification("Microfono disattivato", 3000);
+                    return;
+                }
+                app.ToggleChatState();
+            },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "click_timer",
+            .skip_unhandled_events = true,
+        };
+        esp_timer_create(&click_args, &click_timer_);
+
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
-                EnterWifiConfigMode();
-                return;
-            }
-            app.ToggleChatState();
+            esp_timer_stop(click_timer_);
+            esp_timer_start_once(click_timer_, 400 * 1000);
         });
+        boot_button_.OnDoubleClick([this]() {
+            esp_timer_stop(click_timer_);
+            ToggleMicMute();
+        });
+        
         touch_button_.OnPressDown([this]() {
             Application::GetInstance().StartListening();
         });
@@ -173,7 +230,7 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-        static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+        static MutableMicCodec audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
 #else
         static NoAudioCodecDuplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
