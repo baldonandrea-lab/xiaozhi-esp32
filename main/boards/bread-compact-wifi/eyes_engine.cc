@@ -12,11 +12,21 @@
 #define EYES_COLOR_OFF lv_color_white()
 #endif
 
+// Dopo quanti ms di riposo (in attesa di "Ciao AXA") gli occhi si addormentano.
+// 0 = subito; -1 = mai.
+#ifndef EYES_SLEEP_AFTER_MS
+#define EYES_SLEEP_AFTER_MS 10000
+#endif
+
 namespace {
 constexpr float kPi = 3.14159265f;
 constexpr uint32_t kFrameMs = 66;      // ~15 fps: meno traffico I2C e meno carico
                                        // (a 30 fps disturbava l'acquisizione audio)
 constexpr uint32_t kBlinkMs = 170;     // durata ammiccamento
+constexpr float kFallAsleepTau = 1400; // palpebre che calano piano (~4 s)
+constexpr float kWakeTau = 90;         // risveglio rapido
+constexpr uint32_t kZStepMs = 300;     // le "z" salgono a scatti lenti (pochi ridisegni)
+constexpr int kZSteps = 12;
 
 inline int32_t Q(float v) { return static_cast<int32_t>(lroundf(v)); }
 
@@ -90,7 +100,7 @@ void EyesEngine::Create(lv_obj_t* parent, int width, int height) {
     lv_obj_add_event_cb(obj_, DrawCb, LV_EVENT_DRAW_MAIN_END, this);
 
     target_ = cur_ = draw_ = ShapeFor("neutral", nullptr);
-    t0_ = last_ms_ = lv_tick_get();
+    t0_ = last_ms_ = idle_since_ = lv_tick_get();
     next_blink_ = t0_ + 1500;
     next_saccade_ = t0_ + 2500;
     timer_ = lv_timer_create(TimerCb, kFrameMs, this);
@@ -104,7 +114,27 @@ bool EyesEngine::SetExpression(const char* name) {
     return known;
 }
 
-void EyesEngine::SetActivity(Activity activity) { activity_ = activity; }
+void EyesEngine::SetActivity(Activity activity) {
+    if (activity != activity_) {
+        uint32_t now = lv_tick_get();
+        idle_since_ = now;             // il conto alla rovescia del sonno riparte
+        if (activity == Activity::Idle && sleep_requested_ && now - sleep_request_ms_ < 5000) {
+            force_sleep_ = true;       // richiesto col bottone: si addormenta subito
+        }
+        if (activity == Activity::Idle) sleep_requested_ = false;
+        if (activity != Activity::Idle) force_sleep_ = false;
+    }
+    activity_ = activity;
+}
+
+void EyesEngine::SleepNow() {
+    sleep_request_ms_ = lv_tick_get();
+    sleep_requested_ = true;
+    if (activity_ == Activity::Idle) {
+        force_sleep_ = true;
+        sleep_requested_ = false;
+    }
+}
 
 void EyesEngine::SetVisible(bool visible) {
     if (obj_ == nullptr) return;
@@ -154,8 +184,24 @@ void EyesEngine::Tick(uint32_t now) {
             break;
     }
 
-    // 2) sguardi casuali quando è a riposo
-    if (activity_ == Activity::Idle && !sleeping_ && target_.gx == 0 && target_.gy == 0) {
+    // 1b) sonno profondo: dopo un po' di riposo le palpebre calano e si addormenta
+    bool want_sleep = activity_ == Activity::Idle &&
+                      (force_sleep_ || (EYES_SLEEP_AFTER_MS >= 0 &&
+                       static_cast<int32_t>(now - idle_since_) >= static_cast<int32_t>(EYES_SLEEP_AFTER_MS)));
+    doze_ = Approach(doze_, want_sleep ? 1.0f : 0.0f, dt, want_sleep ? kFallAsleepTau : kWakeTau);
+    if (want_sleep && doze_ > 0.995f) doze_ = 1.0f;
+    if (!want_sleep && doze_ < 0.01f) doze_ = 0.0f;
+    if (doze_ > 0.0f) {
+        goal.gx *= 1.0f - doze_;                         // sguardo al centro, un po' in basso
+        goal.gy = goal.gy * (1.0f - doze_) + 4.0f * doze_;
+        goal.happy *= 1.0f - doze_;
+        goal.lid_in = std::fmax(goal.lid_in, 0.4f * doze_);   // palpebre pesanti
+        goal.lid_out = std::fmax(goal.lid_out, 0.4f * doze_);
+    }
+
+    // 2) sguardi casuali quando è a riposo (non mentre si addormenta)
+    if ((activity_ == Activity::Idle || activity_ == Activity::Awake) && !want_sleep &&
+        doze_ == 0.0f && !sleeping_ && target_.gx == 0 && target_.gy == 0) {
         if (now >= next_saccade_) {
             uint32_t r = Rand();
             if (r % 3 == 0) {
@@ -189,7 +235,10 @@ void EyesEngine::Tick(uint32_t now) {
 
     // 4) ammiccamento (anche doppio); quando dorme respira lentamente
     float blink = 1.0f;
-    if (sleeping_) {
+    if (doze_ > 0.0f) {
+        blinking_ = false;                               // niente ammiccamenti nel sonno
+        blink = 1.0f - 0.95f * doze_;
+    } else if (sleeping_) {
         blink = 0.85f + 0.15f * std::sin(t * 2 * kPi * 0.25f);
     } else {
         if (!blinking_ && now >= next_blink_ && activity_ != Activity::Listening) {
@@ -219,11 +268,21 @@ void EyesEngine::Tick(uint32_t now) {
     draw_.open_l *= blink;
     draw_.open_r *= blink;
 
+    // respiro lento e "z" che salgono, solo a sonno profondo
+    if (doze_ > 0.97f) {
+        breath_ = 1.0f * std::sin(t * 2 * kPi * 0.2f);
+        z_step_ = static_cast<int>((now / kZStepMs) % kZSteps);
+    } else {
+        breath_ = 0.0f;
+        z_step_ = -1;
+    }
+
     // 5) ridisegna solo se cambia qualcosa di visibile (risparmia I2C)
-    int32_t sig[12] = {
+    int32_t sig[15] = {
         Q(draw_.w * k_), Q(draw_.h * k_), Q(draw_.r * k_), Q(draw_.gx * k_), Q(draw_.gy * k_),
         Q(draw_.lid_in * 40), Q(draw_.lid_out * 40), Q(draw_.happy * 40),
-        Q(draw_.scale_l * 40), Q(draw_.scale_r * 40), Q(draw_.open_l * 40), Q(draw_.open_r * 40)};
+        Q(draw_.scale_l * 40), Q(draw_.scale_r * 40), Q(draw_.open_l * 40), Q(draw_.open_r * 40),
+        Q(doze_ * 40), z_step_, Q(breath_ * k_)};
     if (obj_ != nullptr && std::memcmp(sig, drawn_sig_, sizeof(sig)) != 0) {
         std::memcpy(drawn_sig_, sig, sizeof(sig));
         // ridisegna solo il rettangolo che contiene gli occhi (vecchia + nuova posizione)
@@ -235,6 +294,15 @@ void EyesEngine::Tick(uint32_t now) {
             dirty.x2 = LV_MAX(dirty.x2, last_area_.x2);
             dirty.y2 = LV_MAX(dirty.y2, last_area_.y2);
         }
+        bool z_now = z_step_ >= 0;
+        if (z_now || z_drawn_) {                         // includi (o cancella) le "z"
+            lv_area_t z = ZArea();
+            dirty.x1 = LV_MIN(dirty.x1, z.x1);
+            dirty.y1 = LV_MIN(dirty.y1, z.y1);
+            dirty.x2 = LV_MAX(dirty.x2, z.x2);
+            dirty.y2 = LV_MAX(dirty.y2, z.y2);
+        }
+        z_drawn_ = z_now;
         last_area_ = area;
         has_last_area_ = true;
         lv_obj_invalidate_area(obj_, &dirty);
@@ -276,6 +344,49 @@ void EyesEngine::Draw(lv_layer_t* layer, const lv_area_t* a) {
     float mid = width_ / 2.0f;
     DrawEye(layer, a, mid - spacing * k_, true);
     DrawEye(layer, a, mid + spacing * k_, false);
+    if (z_step_ >= 0) DrawZ(layer, a);
+}
+
+// Zona in alto a destra dove salgono le "z" (coordinate schermo)
+lv_area_t EyesEngine::ZArea() const {
+    lv_area_t z;
+    z.x1 = static_cast<int32_t>(width_ / 2.0f + 26.0f * k_) - 2;
+    z.x2 = static_cast<int32_t>(width_ / 2.0f + 60.0f * k_) + 2;
+    z.y1 = 0;
+    z.y2 = static_cast<int32_t>(height_ / 2.0f - 8.0f * k_) + 2;
+    if (z.x2 > width_ - 1) z.x2 = width_ - 1;
+    return z;
+}
+
+// Tre "z" sfalsate che salgono e crescono, come nei fumetti
+void EyesEngine::DrawZ(lv_layer_t* layer, const lv_area_t* a) {
+    float bx = a->x1 + width_ / 2.0f + 26.0f * k_;
+    float by = a->y1 + height_ / 2.0f - 8.0f * k_;
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color = EYES_COLOR_ON;
+    rd.bg_opa = LV_OPA_COVER;
+    auto fill = [&](int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
+        lv_area_t r = {x1, y1, x2, y2};
+        lv_draw_rect(layer, &rd, &r);
+    };
+    // disegnate a pixel pieni: sull'OLED a 1 bit le linee sfumate sparirebbero
+    for (int i = 0; i < 3; ++i) {
+        float p = ((z_step_ + i * (kZSteps / 3)) % kZSteps) / static_cast<float>(kZSteps);
+        int32_t sz = lroundf((4.0f + 4.5f * p) * k_);
+        if (sz < 3) sz = 3;
+        const int32_t t = 1;                           // tratto di 1 px: resta leggibile anche grande
+        int32_t x0 = lroundf(bx + p * 28.0f * k_);
+        int32_t y1 = lroundf(by - p * 22.0f * k_);    // base della z
+        int32_t y0 = y1 - sz + 1;                      // cima della z
+        if (y0 < a->y1) continue;
+        fill(x0, y0, x0 + sz - 1, y0 + t - 1);         // tratto in alto
+        fill(x0, y1 - t + 1, x0 + sz - 1, y1);         // tratto in basso
+        for (int32_t r = y0 + t; r <= y1 - t; ++r) {   // diagonale
+            int32_t x = x0 + (sz - t) - ((r - y0) * (sz - t) + (sz - 1) / 2) / (sz - 1);
+            fill(x, r, x + t - 1, r);
+        }
+    }
 }
 
 void EyesEngine::DrawEye(lv_layer_t* layer, const lv_area_t* a, float cx_screen, bool left) {
@@ -285,6 +396,29 @@ void EyesEngine::DrawEye(lv_layer_t* layer, const lv_area_t* a, float cx_screen,
 
     float w = s.w * scale * k_;
     float h_full = s.h * scale * k_;
+
+    // addormentato: occhio chiuso a forma di arco rilassato, che respira piano
+    if (doze_ > 0.95f) {
+        float cx = a->x1 + cx_screen + s.gx * k_;
+        float y_line = a->y1 + height_ / 2.0f + s.gy * k_ + h_full * 0.25f + breath_ * k_;
+        float half = w * 0.42f;
+        float sag = 4.0f * k_ + 1.0f;
+        float radius = (half * half + sag * sag) / (2.0f * sag);
+        float ang = std::asin(std::fmin(1.0f, half / radius)) * 180.0f / kPi;
+        lv_draw_arc_dsc_t ad;
+        lv_draw_arc_dsc_init(&ad);
+        ad.color = EYES_COLOR_ON;
+        ad.opa = LV_OPA_COVER;
+        ad.width = static_cast<int32_t>(std::fmax(2.0f, 4.0f * k_));
+        ad.rounded = 1;
+        ad.center.x = lroundf(cx);
+        ad.center.y = lroundf(y_line + sag - radius);
+        ad.radius = static_cast<uint16_t>(lroundf(radius));
+        ad.start_angle = static_cast<lv_value_precise_t>(lroundf(90 - ang));
+        ad.end_angle = static_cast<lv_value_precise_t>(lroundf(90 + ang));
+        lv_draw_arc(layer, &ad);
+        return;
+    }
     float h = std::fmax(2.0f * k_ + 1.0f, h_full * open);
     float cx = a->x1 + cx_screen + s.gx * k_;
     float cy = a->y1 + height_ / 2.0f + s.gy * k_;

@@ -49,6 +49,7 @@ private:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     Display* display_ = nullptr;
+    EyesDisplay* eyes_display_ = nullptr;   // gli occhi (nullptr se il display non parte)
     Button boot_button_;
     Button touch_button_;
     Button volume_up_button_;
@@ -119,7 +120,8 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new EyesDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        eyes_display_ = new EyesDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = eyes_display_;
     }
         esp_timer_handle_t click_timer_ = nullptr;
 
@@ -149,6 +151,12 @@ private:
                 if (self->GetMicCodec()->mic_muted) {
                     self->GetDisplay()->ShowNotification("Microfono disattivato", 3000);
                     return;
+                }
+                // se il click chiude la conversazione, tornando a riposo gli occhi si addormentano
+                auto state = app.GetDeviceState();
+                if (self->eyes_display_ != nullptr &&
+                    (state == kDeviceStateListening || state == kDeviceStateSpeaking)) {
+                    self->eyes_display_->SleepNow();
                 }
                 app.ToggleChatState();
             },

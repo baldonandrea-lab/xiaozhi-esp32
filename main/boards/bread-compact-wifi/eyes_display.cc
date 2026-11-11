@@ -84,7 +84,8 @@ void EyesDisplay::StateTimerCb(lv_timer_t* t) {
         case kDeviceStateConnecting:
         case kDeviceStateActivating:
         case kDeviceStateUpgrading: self->eyes_.SetActivity(A::Connecting); break;
-        default:                    self->eyes_.SetActivity(A::Idle); break;
+        case kDeviceStateIdle:      self->eyes_.SetActivity(A::Idle); break;   // può addormentarsi
+        default:                    self->eyes_.SetActivity(A::Awake); break;
     }
 }
 
@@ -194,4 +195,9 @@ void EyesDisplay::ShowNotification(const std::string& notification, int duration
 void EyesDisplay::UpdateStatusBar(bool update_all) {
     // Nessuna icona Wi-Fi/batteria/muto da aggiornare.
     (void)update_all;
+}
+
+void EyesDisplay::SleepNow() {
+    DisplayLockGuard lock(this);   // chiamato dal task del bottone, non da LVGL
+    eyes_.SleepNow();
 }

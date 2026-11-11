@@ -8,7 +8,9 @@
 
 class EyesEngine {
 public:
-    enum class Activity { Idle, Connecting, Listening, Speaking };
+    // Idle = in attesa della parola di attivazione (dopo un po' si addormenta);
+    // Awake = altri stati di attesa in cui deve restare sveglio.
+    enum class Activity { Idle, Awake, Connecting, Listening, Speaking };
 
     EyesEngine() = default;
     ~EyesEngine();
@@ -19,6 +21,9 @@ public:
     bool SetExpression(const char* name);
     void SetActivity(Activity activity);
     void SetVisible(bool visible);
+    // Addormentati appena il dispositivo torna a riposo (es. click che chiude la conversazione).
+    // La richiesta vale per 5 s: se nel frattempo non va a riposo, viene dimenticata.
+    void SleepNow();
     // Avanza l'animazione: chiamato dal timer LVGL (pubblico per i test).
     void Tick(uint32_t now_ms);
 
@@ -37,6 +42,8 @@ private:
     static void DrawCb(lv_event_t* e);
     void Draw(lv_layer_t* layer, const lv_area_t* a);
     void DrawEye(lv_layer_t* layer, const lv_area_t* a, float cx, bool left);
+    void DrawZ(lv_layer_t* layer, const lv_area_t* a);
+    lv_area_t ZArea() const;
     uint32_t Rand();
     lv_area_t EyesArea() const;
 
@@ -47,7 +54,15 @@ private:
 
     Shape target_{}, cur_{}, draw_{};
     Activity activity_ = Activity::Idle;
-    bool sleeping_ = false;
+    bool sleeping_ = false;                // espressione "sleepy" (assonnato)
+    uint32_t idle_since_ = 0;              // da quando è a riposo
+    float doze_ = 0.0f;                    // sonno profondo: 0 sveglio, 1 addormentato
+    int z_step_ = -1;
+    bool z_drawn_ = false;                      // fotogramma delle "z" (-1 = nessuna)
+    float breath_ = 0.0f;
+    bool sleep_requested_ = false;         // SleepNow() in attesa del riposo
+    uint32_t sleep_request_ms_ = 0;
+    bool force_sleep_ = false;             // dorme subito, senza aspettare                  // respiro durante il sonno (px)
 
     uint32_t last_ms_ = 0, t0_ = 0;
     uint32_t next_blink_ = 0, blink_start_ = 0;
@@ -55,7 +70,7 @@ private:
     uint32_t next_saccade_ = 0;
     float sacc_x_ = 0, sacc_y_ = 0;
     uint32_t rng_ = 0x1234567u;
-    int32_t drawn_sig_[12] = {0};
+    int32_t drawn_sig_[15] = {0};
     lv_area_t last_area_{};
     bool has_last_area_ = false;
 };

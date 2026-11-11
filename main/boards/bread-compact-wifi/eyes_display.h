@@ -23,6 +23,9 @@ public:
     void ShowNotification(const std::string& notification, int duration_ms = 3000) override;
     void UpdateStatusBar(bool update_all = false) override;
 
+    // Fa addormentare gli occhi appena il dispositivo torna a riposo.
+    void SleepNow();
+
 private:
     static void StateTimerCb(lv_timer_t* t);
     static void NotificationTimerCb(lv_timer_t* t);
