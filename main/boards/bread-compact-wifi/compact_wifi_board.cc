@@ -152,11 +152,16 @@ private:
                     self->GetDisplay()->ShowNotification("Microfono disattivato", 3000);
                     return;
                 }
-                // se il click chiude la conversazione, tornando a riposo gli occhi si addormentano
                 auto state = app.GetDeviceState();
-                if (self->eyes_display_ != nullptr &&
-                    (state == kDeviceStateListening || state == kDeviceStateSpeaking)) {
-                    self->eyes_display_->SleepNow();
+                if (state == kDeviceStateListening) {
+                    // il click chiude la conversazione: dorme e si risveglia solo col bottone
+                    app.SetWakeWordSuspended(true);
+                    if (self->eyes_display_ != nullptr) {
+                        self->eyes_display_->SleepNow();
+                    }
+                } else if (state == kDeviceStateIdle && app.IsWakeWordSuspended()) {
+                    // risveglio col bottone: riattiva "Ciao AXA" e inizia ad ascoltare
+                    app.SetWakeWordSuspended(false);
                 }
                 app.ToggleChatState();
             },
@@ -177,6 +182,7 @@ private:
         });
         
         touch_button_.OnPressDown([this]() {
+            Application::GetInstance().SetWakeWordSuspended(false);  // anche il push-to-talk la sveglia
             Application::GetInstance().StartListening();
         });
         touch_button_.OnPressUp([this]() {

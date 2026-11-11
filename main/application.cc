@@ -916,6 +916,11 @@ void Application::HandleWakeWordDetectedEvent() {
     auto wake_word = audio_service_.GetLastWakeWord();
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
 
+    if (wake_word_suspended_ && state == kDeviceStateIdle) {
+        ESP_LOGI(TAG, "Dorme (bottone): parola di attivazione ignorata");
+        return;
+    }
+
     if (state == kDeviceStateIdle) {
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateNotifying) {
@@ -942,6 +947,17 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
+}
+
+void Application::SetWakeWordSuspended(bool suspended) {
+    wake_word_suspended_ = suspended;
+    ESP_LOGI(TAG, "Parola di attivazione %s", suspended ? "sospesa (sonno col bottone)" : "attiva");
+    // applica subito se siamo già a riposo (nel task principale)
+    Schedule([this]() {
+        if (GetDeviceState() == kDeviceStateIdle) {
+            audio_service_.EnableWakeWordDetection(!wake_word_suspended_);
+        }
+    });
 }
 
 void Application::BeginWakeWordInvoke(const std::string& wake_word) {
@@ -1030,7 +1046,7 @@ void Application::HandleStateChangedEvent() {
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
             audio_service_.EnableVoiceProcessing(false);
-            audio_service_.EnableWakeWordDetection(true);
+            audio_service_.EnableWakeWordDetection(!wake_word_suspended_);
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);

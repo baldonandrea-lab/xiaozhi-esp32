@@ -8,6 +8,7 @@
 
 #include <string>
 #include <mutex>
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <functional>
@@ -118,6 +119,13 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
+
+    /**
+     * Sonno col bottone: a riposo ignora la parola di attivazione finché non si
+     * esce dal riposo (bottone o push-to-talk). Thread-safe.
+     */
+    void SetWakeWordSuspended(bool suspended);
+    bool IsWakeWordSuspended() const { return wake_word_suspended_; }
     
     /**
      * Reset protocol resources (thread-safe)
@@ -155,6 +163,7 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
+    std::atomic<bool> wake_word_suspended_{false};  // sonno col bottone: niente "Ciao AXA"
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
