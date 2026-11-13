@@ -218,6 +218,9 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
+            if (GetDeviceState() == kDeviceStateSpeaking && audio_service_.IsPlaybackIdle()) {
+                speech_end_us_ = esp_timer_get_time();
+            }
             if (audio_service_.IsPlaybackIdle()) {
                 notify_player_.OnPlaybackDrained();
             }
@@ -645,6 +648,9 @@ void Application::InitializeProtocol() {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
+                            // piccolo "pop" quando è di nuovo pronto ad ascoltare:
+                            // la persona sa che adesso può rispondere
+                            play_popup_on_listening_ = true;
                             SetDeviceState(kDeviceStateListening);
                         }
                     }
@@ -1052,6 +1058,7 @@ void Application::HandleStateChangedEvent() {
             }
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(!wake_word_suspended_);
+            audio_service_.KeepInputOn(false);
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -1079,6 +1086,7 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
+            audio_service_.KeepInputOn(true);   // microfono pronto per la risposta della persona
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
@@ -1176,6 +1184,12 @@ void Application::StartListeningAudio() {
     // deferred via MAIN_EVENT_PLAYBACK_DRAINED once the playback queue drains.
     if (GetDeviceState() != kDeviceStateListening) {
         return;
+    }
+
+    if (speech_end_us_ != 0) {
+        ESP_LOGI(TAG, "Pronto ad ascoltare %d ms dopo la fine della voce",
+                 (int)((esp_timer_get_time() - speech_end_us_) / 1000));
+        speech_end_us_ = 0;
     }
 
     // Send the start listening command

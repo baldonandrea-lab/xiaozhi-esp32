@@ -141,6 +141,9 @@ public:
     void EnableWakeWordDetection(bool enable);
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
+    // Tiene acceso il microfono durante la conversazione: niente ritardo di riaccensione
+    // quando, finita la risposta, il robot torna ad ascoltare.
+    void KeepInputOn(bool on) { keep_input_on_ = on; }
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
@@ -198,6 +201,8 @@ private:
     bool decode_in_flight_ = false;
     bool output_in_flight_ = false;
     bool output_primed_ = false;        // riserva audio già riempita
+    std::atomic<bool> keep_input_on_{false};
+    bool local_sound_ = false;           // suono locale (pop, avvisi): niente attesa di riserva
     bool playback_drained_notified_ = true;
     uint32_t playback_generation_ = 0;
     // For server AEC

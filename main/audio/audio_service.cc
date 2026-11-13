@@ -332,6 +332,10 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
+        if (!output_primed_ && local_sound_) {
+            local_sound_ = false;
+            output_primed_ = true;
+        }
         if (!output_primed_) {
             // Riempie la riserva prima di parlare (o di riprendere dopo un buco di rete)
             auto deadline = std::chrono::steady_clock::now() +
@@ -352,6 +356,7 @@ void AudioService::AudioOutputTask() {
                 ESP_LOGW(TAG, "Pausa audio di %d ms: in attesa di dati dal server", (int)gap_ms);
             }
             output_primed_ = true;
+            local_sound_ = false;
         }
 
         auto task = std::move(audio_playback_queue_.front());
@@ -797,6 +802,12 @@ void AudioService::PlaySound(const std::string_view& ogg) {
         codec_->EnableOutput(true);
     }
 
+    {
+        // i suoni locali sono già tutti in memoria: suonano subito, senza riserva
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        local_sound_ = true;
+    }
+
     const auto* buf = reinterpret_cast<const uint8_t*>(ogg.data());
     size_t size = ogg.size();
 
@@ -865,7 +876,7 @@ void AudioService::CheckAndUpdateAudioPowerState() {
         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
     auto output_elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
-    if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled()) {
+    if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled() && !keep_input_on_) {
         // ADC continuous start/stop must run in the same task. Wake the audio
         // input task instead of closing the codec from the esp_timer task.
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);

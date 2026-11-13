@@ -163,7 +163,8 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
-    std::atomic<bool> wake_word_suspended_{false};  // sonno col bottone: niente "Ciao AXA"
+    std::atomic<bool> wake_word_suspended_{false};
+    int64_t speech_end_us_ = 0;  // quando è finita la voce della risposta (per il log)  // sonno col bottone: niente "Ciao AXA"
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
