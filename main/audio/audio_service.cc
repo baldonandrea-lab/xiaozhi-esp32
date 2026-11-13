@@ -332,6 +332,28 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
+        if (!output_primed_) {
+            // Riempie la riserva prima di parlare (o di riprendere dopo un buco di rete)
+            auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::milliseconds(AUDIO_PREBUFFER_MAX_WAIT_MS);
+            audio_queue_cv_.wait_until(lock, deadline, [this]() {
+                return service_stopped_.load() ||
+                       audio_playback_queue_.size() + audio_decode_queue_.size() >= AUDIO_PREBUFFER_FRAMES;
+            });
+            if (service_stopped_.load()) {
+                break;
+            }
+            if (audio_playback_queue_.empty()) {
+                continue;  // coda svuotata nel frattempo (interruzione)
+            }
+            auto gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - last_output_time_).count();
+            if (debug_statistics_.playback_count > 0 && gap_ms < 1500) {
+                ESP_LOGW(TAG, "Pausa audio di %d ms: in attesa di dati dal server", (int)gap_ms);
+            }
+            output_primed_ = true;
+        }
+
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
         output_in_flight_ = true;
@@ -366,6 +388,9 @@ void AudioService::AudioOutputTask() {
         }
 #endif
         output_in_flight_ = false;
+        if (audio_playback_queue_.empty() && audio_decode_queue_.empty() && !decode_in_flight_) {
+            output_primed_ = false;  // riserva finita: alla prossima voce la riempie di nuovo
+        }
         notify_drained = MarkPlaybackDrainedLocked();
         audio_queue_cv_.notify_all();
         lock.unlock();

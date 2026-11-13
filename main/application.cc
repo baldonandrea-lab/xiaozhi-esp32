@@ -920,6 +920,11 @@ void Application::HandleWakeWordDetectedEvent() {
         ESP_LOGI(TAG, "Dorme (bottone): parola di attivazione ignorata");
         return;
     }
+    if (state == kDeviceStateListening) {
+        // rilevamento arrivato mentre ascolta: ignorato, la domanda continua
+        ESP_LOGI(TAG, "Parola di attivazione durante l'ascolto: ignorata");
+        return;
+    }
 
     if (state == kDeviceStateIdle) {
         BeginWakeWordInvoke(wake_word);
@@ -1187,13 +1192,10 @@ void Application::StartListeningAudio() {
 }
 
 void Application::ConfigureWakeWordForListening() {
-#ifdef CONFIG_WAKE_WORD_DETECTION_IN_LISTENING
-    // Enable wake word detection in listening mode (configured via Kconfig)
-    audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
-#else
-    // Disable wake word detection in listening mode
+    // Mentre ascolta la domanda la parola di attivazione resta spenta: se la persona
+    // dice "ciao" o "AXA" dentro la frase, non deve ricominciare l'ascolto da capo.
+    // (Per interrompere si usa il bottone.)
     audio_service_.EnableWakeWordDetection(false);
-#endif
 }
 
 void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles) {
