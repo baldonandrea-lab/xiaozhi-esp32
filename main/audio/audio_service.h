@@ -46,8 +46,8 @@
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 // Riserva di audio: prima di (ri)partire a parlare accumula qualche pacchetto,
 // così un rallentamento breve del Wi-Fi non interrompe la voce a metà parola.
-#define AUDIO_PREBUFFER_FRAMES 4        // 4 x 60 ms = 240 ms
-#define AUDIO_PREBUFFER_MAX_WAIT_MS 400 // non aspetta mai più di così
+#define AUDIO_PREBUFFER_FRAMES 6        // 6 x 60 ms = 360 ms
+#define AUDIO_PREBUFFER_MAX_WAIT_MS 500 // non aspetta mai più di così
 
 #define AUDIO_POWER_TIMEOUT_MS 15000
 #define AUDIO_POWER_CHECK_INTERVAL_MS 1000

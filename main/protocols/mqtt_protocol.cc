@@ -9,9 +9,14 @@
 #include <charconv>
 #include <cstring>
 #include <system_error>
+#include <vector>
 #include "assets/lang_config.h"
 
 #define TAG "MQTT"
+
+// Quanti pacchetti audio tenere da parte aspettando quelli arrivati in ritardo
+// (5 x 60 ms = 300 ms). Oltre, il pacchetto mancante si considera perso.
+#define AUDIO_REORDER_WINDOW 5
 
 MqttProtocol::MqttProtocol() {
     event_group_handle_ = xEventGroupCreate();
@@ -331,14 +336,10 @@ bool MqttProtocol::OpenAudioChannel() {
 
         {
             std::lock_guard<std::mutex> lock(channel_mutex_);
-            if (sequence <= remote_sequence_) {
+            if (sequence <= remote_sequence_ || reorder_buffer_.count(sequence) != 0) {
                 ESP_LOGW(TAG, "Received duplicate/old audio sequence: %lu, last: %lu", sequence,
                          remote_sequence_);
                 return;
-            }
-            if (sequence != remote_sequence_ + 1) {
-                ESP_LOGW(TAG, "Received audio packet with wrong sequence: %lu, expected: %lu",
-                         sequence, remote_sequence_ + 1);
             }
         }
 
@@ -355,16 +356,42 @@ bool MqttProtocol::OpenAudioChannel() {
             ESP_LOGE(TAG, "Failed to decrypt audio data");
             return;
         }
+        // Rimette in ordine i pacchetti: quelli arrivati in anticipo aspettano i mancanti
+        std::vector<std::unique_ptr<AudioStreamPacket>> ready;
         {
             std::lock_guard<std::mutex> lock(channel_mutex_);
-            if (sequence <= remote_sequence_) {
+            if (sequence <= remote_sequence_ || reorder_buffer_.count(sequence) != 0) {
                 return;
             }
-            remote_sequence_ = sequence;
+            if (sequence == remote_sequence_ + 1) {
+                remote_sequence_ = sequence;
+                ready.push_back(std::move(packet));
+            } else {
+                reorder_buffer_[sequence] = std::move(packet);
+                if (reorder_buffer_.size() > AUDIO_REORDER_WINDOW) {
+                    // il pacchetto mancante non arriva più: lo salta
+                    uint32_t first = reorder_buffer_.begin()->first;
+                    ESP_LOGW(TAG, "Audio perso dalla rete: pacchetti %lu-%lu", remote_sequence_ + 1,
+                             first - 1);
+                    remote_sequence_ = first - 1;
+                }
+            }
+            auto it = reorder_buffer_.begin();
+            while (it != reorder_buffer_.end() && it->first == remote_sequence_ + 1) {
+                remote_sequence_ = it->first;
+                ready.push_back(std::move(it->second));
+                it = reorder_buffer_.erase(it);
+            }
+            if (ready.size() > 1 && sequence < remote_sequence_) {
+                ESP_LOGI(TAG, "Audio riordinato: recuperato il pacchetto %lu arrivato in ritardo",
+                         sequence);
+            }
         }
         last_incoming_time_ = std::chrono::steady_clock::now();
         if (on_incoming_audio_ != nullptr) {
-            on_incoming_audio_(std::move(packet));
+            for (auto& p : ready) {
+                on_incoming_audio_(std::move(p));
+            }
         }
     });
 
@@ -498,6 +525,7 @@ void MqttProtocol::ParseServerHello(const cJSON* root) {
         aes_nonce_ = std::move(aes_nonce);
         local_sequence_ = 0;
         remote_sequence_ = 0;
+        reorder_buffer_.clear();
     }
     xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
 }

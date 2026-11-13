@@ -56,6 +56,8 @@ private:
     int udp_port_;
     uint32_t local_sequence_;
     uint32_t remote_sequence_;
+    // Pacchetti audio arrivati in anticipo (fuori ordine), in attesa di quelli mancanti
+    std::map<uint32_t, std::unique_ptr<AudioStreamPacket>> reorder_buffer_;
     esp_timer_handle_t reconnect_timer_;
 
     bool StartMqttClient(bool report_error=false);
